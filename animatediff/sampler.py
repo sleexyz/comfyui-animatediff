@@ -86,15 +86,20 @@ def eject_motion_module_from_unet_legacy(unet):
 def inject_motion_module_to_unet(unet, motion_module: MotionWrapper):
     for mm_idx, unet_idx in enumerate([1, 2, 4, 5, 7, 8, 10, 11]):
         mm_idx0, mm_idx1 = mm_idx // 2, mm_idx % 2
-        unet.input_blocks[unet_idx].append(motion_module.down_blocks[mm_idx0].motion_modules[mm_idx1])
+        print(f"unet.input_blocks[unet_idx={unet_idx}].append(motion_module.down_blocks[mm_idx0={mm_idx0}].motion_modules[mm_idx1={mm_idx1}])")
+        module = motion_module.down_blocks[mm_idx0].motion_modules[mm_idx1]
+        unet.input_blocks[unet_idx].append(module)
 
     for unet_idx in range(12):
         mm_idx0, mm_idx1 = unet_idx // 3, unet_idx % 3
         if unet_idx % 3 == 2 and unet_idx != 11:
+            print(f"unet.output_blocks[unet_idx={unet_idx}].insert(-1, motion_module.up_blocks[mm_idx0={mm_idx0}].motion_modules[mm_idx1={mm_idx1}])")
             unet.output_blocks[unet_idx].insert(-1, motion_module.up_blocks[mm_idx0].motion_modules[mm_idx1])
         else:
+            print(f"unet.output_blocks[unet_idx={unet_idx}].append(motion_module.up_blocks[mm_idx0={mm_idx0}].motion_modules[mm_idx1={mm_idx1}])")
             unet.output_blocks[unet_idx].append(motion_module.up_blocks[mm_idx0].motion_modules[mm_idx1])
     if motion_module.is_v2:
+        print(f"unet.middle_block.insert(-1, motion_module.mid_block.motion_modules[0])")
         unet.middle_block.insert(-1, motion_module.mid_block.motion_modules[0])
 
     unet.motion_module = motion_module
@@ -165,7 +170,7 @@ class AnimateDiffSampler(KSampler):
                 "inject_method": (["default", "legacy"],),
                 "frame_number": (
                     "INT",
-                    {"default": 16, "min": 2, "max": 10000, "step": 1},
+                    {"default": 16, "min": 1, "max": 10000, "step": 1},
                 ),
             }
         }
@@ -195,7 +200,7 @@ class AnimateDiffSampler(KSampler):
         unet = model.model.diffusion_model
 
         logger.info(f"Injecting motion module with method {inject_method}.")
-        motion_module.set_video_length(frame_number)
+        motion_module.set_video_length(16)
         injectors[inject_method](unet, motion_module)
         self.override_beta_schedule(model.model)
         openaimodel.forward_timestep_embed = forward_timestep_embed
@@ -266,11 +271,14 @@ class AnimateDiffSampler(KSampler):
                 f"AnimateDiff model {motion_module.mm_type} has upper limit of {motion_module.encoding_max_len} frames, but received {error}."
             )
 
+        disable_motion = False
+
         # inject motion module
-        model = self.inject_motion_module(model, motion_module, inject_method, video_length)
+        if not disable_motion:
+            model = self.inject_motion_module(model, motion_module, inject_method, video_length)
 
         # inject sliding sampler
-        if is_sliding:
+        if is_sliding and not disable_motion:
             self.inject_sliding_sampler(frame_number, sliding_window_opts=sliding_window_opts)
 
         try:
@@ -291,8 +299,9 @@ class AnimateDiffSampler(KSampler):
             raise
         finally:
             # eject motion module
-            self.eject_motion_module(model, inject_method)
+            if not disable_motion:
+                self.eject_motion_module(model, inject_method)
 
             # eject sliding sampler
-            if is_sliding:
+            if is_sliding and not disable_motion:
                 self.eject_sliding_sampler()

@@ -101,6 +101,7 @@ class MotionWrapper(nn.Module):
         mm.load_state_dict(mm_state_dict, strict=False)
         return mm
 
+
     def set_video_length(self, video_length: int):
         for block in self.down_blocks:
             block.set_video_length(video_length)
@@ -108,6 +109,7 @@ class MotionWrapper(nn.Module):
             block.set_video_length(video_length)
         if self.mid_block is not None:
             self.mid_block.set_video_length(video_length)
+
 
 
 class BlockType:
@@ -173,6 +175,9 @@ class VanillaTemporalModule(nn.Module):
             temporal_position_encoding_max_len=temporal_position_encoding_max_len,
         )
 
+        self.last = None
+        self.counter = 0
+
         if zero_initialize:
             self.temporal_transformer.proj_out = zero_module(self.temporal_transformer.proj_out)
 
@@ -180,7 +185,35 @@ class VanillaTemporalModule(nn.Module):
         self.temporal_transformer.set_video_length(video_length)
 
     def forward(self, input_tensor, encoder_hidden_states=None, attention_mask=None):
-        return self.temporal_transformer(input_tensor, encoder_hidden_states, attention_mask)
+        # load input from buffer
+
+        self.counter += 1
+
+
+        if self.last is None:
+            output = self.temporal_transformer(input_tensor, encoder_hidden_states, attention_mask)
+            # save for next forward pass
+
+            if self.counter % 40 == 0:
+                self.last = input_tensor[8:] # 8
+                # self.last = output[8:] # 8
+
+            print(f"counter: ({self.counter}) first case, input_tensor ({input_tensor.shape})")
+            # self.last = output # 8
+            return output
+
+        else:
+            combined_tensor = torch.cat((self.last, input_tensor), dim=0) # 16
+            print(f"counter: ({self.counter}) combined_tensor ({combined_tensor.shape}) = torch.cat(self.last={self.last.shape}, input_tensor={input_tensor.shape}, dim=0)")
+            output = self.temporal_transformer(combined_tensor, encoder_hidden_states, attention_mask)
+
+            # save for next forward pass
+            if self.counter % 40 == 0:
+                self.last = input_tensor
+                # self.last = output[8:] # 8
+
+            return output[8:] # 8
+
 
 
 class TemporalTransformer3DModel(nn.Module):
